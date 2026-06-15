@@ -11,6 +11,7 @@ Dizel avtomobillər üçün farsunka (injektor) və yüksək təzyiqli nasos (Т
 - Müştəri rusca yazarsa, rusca cavab ver
 - Qısa, aydın, professional ol
 - Heç vaxt uydurma məlumat vermə
+- "Mütləq", "100%", "dəqiq olacaq" kimi söz vermə ifadələri işlətmə
 
 BİZNES MƏLUMATLARI:
 Servis adı: Ultra Avto Dizel (UAD)
@@ -70,44 +71,42 @@ export default async function handler(req, res) {
 
     if (!conversations.has(chatId)) conversations.set(chatId, []);
     const history = conversations.get(chatId);
-    history.push({ role: 'user', parts: [{ text: userText }] });
+    history.push({ role: 'user', content: userText });
     while (history.length > 10) history.shift();
 
-    // Gemini API - system prompt söhbətə daxil edilir
-    const contents = [
-      { role: 'user', parts: [{ text: SYSTEM_PROMPT + '\n\nBu qaydaları başa düşdünsə, "Başa düşdüm" de.' }] },
-      { role: 'model', parts: [{ text: 'Başa düşdüm. UAD BOT kimi xidmət edəcəyəm.' }] },
-      ...history
-    ];
+    // OpenAI API çağırışı
+    const openaiRes = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`
+      },
+      body: JSON.stringify({
+        model: 'gpt-4o-mini',
+        messages: [
+          { role: 'system', content: SYSTEM_PROMPT },
+          ...history
+        ],
+        temperature: 0.7,
+        max_tokens: 500
+      })
+    });
 
-    const geminiRes = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${process.env.GEMINI_API_KEY}`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          contents,
-          generationConfig: { temperature: 0.7, maxOutputTokens: 500 }
-        })
-      }
-    );
+    const openaiData = await openaiRes.json();
 
-    const geminiData = await geminiRes.json();
-
-    // Debug: xəta varsa tam məlumat göndər
-    if (geminiData.error) {
-      console.error('Gemini xəta:', JSON.stringify(geminiData.error));
-      await sendMessage(chatId, 'Xəta kodu: ' + geminiData.error.code + '\nXəta: ' + geminiData.error.message);
+    if (openaiData.error) {
+      console.error('OpenAI xəta:', JSON.stringify(openaiData.error));
+      await sendMessage(chatId, 'Xəta: ' + openaiData.error.message);
       return res.status(200).json({ ok: true });
     }
 
-    if (!geminiData.candidates || !geminiData.candidates[0] || !geminiData.candidates[0].content) {
-      console.error('Boş cavab:', JSON.stringify(geminiData));
-      await sendMessage(chatId, 'Debug: ' + JSON.stringify(geminiData).substring(0, 300));
+    if (!openaiData.choices || !openaiData.choices[0]) {
+      console.error('Boş cavab:', JSON.stringify(openaiData));
+      await sendMessage(chatId, 'Texniki xəta. Zəhmət olmasa yenidən cəhd edin.');
       return res.status(200).json({ ok: true });
     }
 
-    let botReply = geminiData.candidates[0].content.parts[0].text;
+    let botReply = openaiData.choices[0].message.content;
 
     // Lead markeri
     const leadMatch = botReply.match(/\[LEAD:([^\]]+)\]/);
@@ -123,7 +122,7 @@ export default async function handler(req, res) {
       await sendMessage(process.env.ADMIN_CHAT_ID, adminMsg);
     }
 
-    history.push({ role: 'model', parts: [{ text: botReply }] });
+    history.push({ role: 'assistant', content: botReply });
     await sendMessage(chatId, botReply);
     return res.status(200).json({ ok: true });
 
