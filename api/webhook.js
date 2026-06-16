@@ -1,55 +1,79 @@
 // UAD BOT — Ultra Avto Dizel | api/webhook.js
+// v2: function calling ile lead toplama, qisa cavablar, luget, dogrulama
 
-const conversations = new Map();
+const conversations = new Map(); // chatId -> { history: [...], leadSent: boolean }
 
 const SYSTEM_PROMPT = `Sən UAD BOT-san — Ultra Avto Dizel servisinin rəsmi süni intellekt köməkçisisən.
-Dizel avtomobillər üçün farsunka (injektor) və yüksək təzyiqli nasos (ТНВД) xidmətləri göstəririk.
+Dizel avtomobillər üçün farsunka (injektor) və yüksək təzyiqli nasos (TNVD) xidmətləri göstəririk.
 
-ÜMUMI QAYDALAR:
+ÜMUMİ QAYDALAR:
 - Müştəriyə həmişə Siz/Sizin ilə müraciət et
-- Azərbaycan dilində cavab ver
-- Müştəri rusca yazarsa, rusca cavab ver
-- Qısa, aydın, professional ol
-- Heç vaxt uydurma məlumat vermə
-- "Mütləq", "100%", "dəqiq olacaq" kimi söz vermə ifadələri işlətmə
+- Azərbaycan dilində cavab ver, müştəri rusca yazarsa rusca cavab ver
+- Cavabların QISA olsun: adətən 2-4 cümlə, məcburi olmadıqca uzatma
+- Eyni cümləni (telefon nömrəsi, "ətraflı məlumat üçün" və s.) hər cavabda TƏKRARLAMA - yalnız lazım olduqda bir dəfə ver
+- Heç vaxt uydurma məlumat vermə, "mütləq/100%/dəqiq olacaq" kimi söz vermə ifadələri işlətmə
+- Təbii, insan kimi yaz - şablon/robot kimi səslənən cümlələrdən çəkin
+
+LÜĞƏT (yazı səhvləri/sinonimlər - bunları aşağıdakı mənalarda başa düş):
+- forsunka, frsunka, forsinka, injektor → farsunka
+- stend, sten → stend (test/yoxlama)
+- TNVD, ТНВД, tnvd, yüksək təzyiq nasosu → yüksək təzyiqli nasos
+- dızel, desizel → dizel
 
 BİZNES MƏLUMATLARI:
 Servis adı: Ultra Avto Dizel (UAD)
 Ünvan: Əhməd Rəcəbli 304, Elit T/M ilə üzbəüz
 Telefon: 0505770082 - Ramin usta
-İş saatı: Bazar ertəsi - Şənbə, 10:00 - 18:30
-Bazar günü: Qeyri-iş günü
+İş saatı: Bazar ertəsi-Şənbə, 10:00-18:30. Bazar günü qeyri-iş günüdür
 Ödəniş: Nağd, kart, bank köçürməsi
 
-XİDMƏTLƏR VƏ QİYMƏTLƏR:
-1. FARSUNKA STEND + YUYULMA (yuyulma stend daxilindədir)
-   - Müştəri söküb gətirsə: 10 AZN/ədəd
-   - Avtomobillə gəlsə: 20 AZN/ədəd (sökmə+stend+yuyulma+bağlama+diaqnostika+adaptasiya daxil)
-   - Xidmət vaxtı: ən az 40 dəqiqə, avtomobilə görə dəyişir
-2. DİAQNOSTİKA: 10 AZN
-3. ADAPTASİYA/BALANS: 20 AZN-dən başlayaraq
-4. NASOS (TNVD) YOXLANMASI: 30 AZN-dən başlayaraq (markaya görə dəyişir)
-5. FARSUNKA TƏMİRİ: Problemə görə dəyişir, Ramin ustaya yönləndir
-6. FARSUNKA DƏYİŞDİRİLMƏSİ: Mövcuddur, qiymət üçün Ramin ustaya yönləndir
+XIDMƏTLƏR VƏ QIYMƏTLƏR:
+1. Farsunka stend+yuyulma: söküb gətirsə 10 AZN/ədəd, avtomobillə gəlsə 20 AZN/ədəd (sökmə+stend+yuyulma+bağlama+diaqnostika+adaptasiya daxil), ən az 40 dəqiqə
+2. Diaqnostika: 10 AZN
+3. Adaptasiya/Balans: 20 AZN-dən başlayaraq
+4. Nasos (TNVD) yoxlanması: 30 AZN-dən başlayaraq, markaya görə dəyişir
+5. Farsunka təmiri: problemə görə dəyişir, Ramin ustaya yönləndir
+6. Farsunka dəyişdirilməsi: mövcuddur, qiymət üçün Ramin ustaya yönləndir
 
 QƏRAR AĞACI:
-A - Özün cavabla: stend/yuyulma qiyməti, iş saatı, ünvan, telefon, ödəniş, xidmət müddəti
-B - İlkin cavab + məlumat topla: kombinasiyalar, marka sualları, dəyişdirmə/təmir qiyməti, gəlmək istəyənlər
-C - Ramin ustaya yönləndir + məlumat topla: simptomlar (tüstü, güc düşməsi, səs), piezo farsunka, mürəkkəb texniki suallar
+A (özün cavabla): qiymətlər, iş saatı, ünvan, telefon, ödəniş, xidmət müddəti
+B (ilkin cavab + maraq aydınlaşdır): marka sualları, kombinasiya sualları
+C (Ramin ustaya yönləndir): simptomlar, piezo farsunka, mürəkkəb texniki suallar, dəyişdirmə/təmir qiyməti
 
-MÜŞTƏRİ MƏLUMATININ TOPLANMASI:
-B və C hallarında ardıcıl topla: 1) Ad 2) Telefon 3) Maşın markası/modeli/ili
-Topladıqdan sonra de: "Məlumatınız Ramin ustaya yönləndirildi. Əlavə dəqiqləşdirmə üçün 0505770082 nömrəsi ilə əlaqə saxlaya bilərsiniz."
-Cavabının sonuna əlavə et (müştəriyə görünməyəcək): [LEAD:ad=AD|tel=TEL|masin=MASIN]
+LEAD (ƏLAQƏ MƏLUMATI) TOPLAMA QAYDASI - ÇOX VACİB:
+- create_lead funksiyasını YALNIZ HƏR İKİ şərt yerinə yetdikdə çağır:
+  1) Müştəri AÇIQ ŞƏKİLDƏ maraq bildirib (gəlmək istəyir, randevu istəyir, "zəng edin", mürəkkəb problemi var)
+  2) Müştəri telefon nömrəsini artıq YAZIB
+- Sadəcə ümumi sual verən (qiymət, saat, ünvan) müştəri üçün ÇAĞIRMA
+- Müştəri hələ telefon verməyibsə, ƏVVƏLCƏ adi mətnlə soruş, funksiya ÇAĞIRMA
+- Eyni söhbətdə bir dəfə lead göndərildisə, təkrar göndərmə
+- Misal (ÇAĞIRMA): "Farsunka neçəyədir?" → sadəcə qiyməti de
+- Misal (ÇAĞIR): "Sabah gələ bilərəm" + telefon verdikdə → çağır
 
-RANDEVU: "Öncədən zəng etməyiniz daha məqsədəuyğundur: 0505770082 - Ramin usta"
+RANDEVU: "Öncədən zəng etməyiniz daha məqsədəuyğundur: 0505770082 - Ramin usta"`;
 
-QADAĞALAR: Dəqiq təmir qiyməti vermə. Bazar günü xidmət vəd etmə. Uydurma məlumat vermə.`;
+const TOOLS = [
+  {
+    type: 'function',
+    function: {
+      name: 'create_lead',
+      description: 'Müştəri real xidmət üçün maraq bildirib və telefon nömrəsini verdikdə çağır. Yalnız bu halda çağır, ümumi suallarda çağırma.',
+      parameters: {
+        type: 'object',
+        properties: {
+          ad: { type: 'string', description: 'Müştərinin adı (məlum deyilsə boş string)' },
+          telefon: { type: 'string', description: 'Müştərinin telefon nömrəsi (məcburidir)' },
+          masin: { type: 'string', description: 'Avtomobil marka/model/il (məlum deyilsə boş string)' },
+          movzu: { type: 'string', description: 'Müraciətin qısa mövzusu' }
+        },
+        required: ['telefon']
+      }
+    }
+  }
+];
 
 export default async function handler(req, res) {
-  if (req.method !== 'POST') {
-    return res.status(200).json({ ok: true });
-  }
+  if (req.method !== 'POST') return res.status(200).json({ ok: true });
 
   try {
     const update = req.body;
@@ -69,60 +93,57 @@ export default async function handler(req, res) {
       return res.status(200).json({ ok: true });
     }
 
-    if (!conversations.has(chatId)) conversations.set(chatId, []);
-    const history = conversations.get(chatId);
-    history.push({ role: 'user', content: userText });
-    while (history.length > 10) history.shift();
+    if (!conversations.has(chatId)) {
+      conversations.set(chatId, { history: [], leadSent: false });
+    }
+    const convo = conversations.get(chatId);
+    convo.history.push({ role: 'user', content: userText });
+    while (convo.history.length > 10) convo.history.shift();
 
-    // OpenAI API çağırışı
-    const openaiRes = await fetch('https://api.openai.com/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`
-      },
-      body: JSON.stringify({
-        model: 'gpt-4o-mini',
-        messages: [
+    const messages = [{ role: 'system', content: SYSTEM_PROMPT }, ...convo.history];
+
+    const firstRes = await callOpenAI(messages, true);
+    if (firstRes.error) {
+      console.error('OpenAI xəta:', JSON.stringify(firstRes.error));
+      await sendMessage(chatId, 'Xəta: ' + firstRes.error.message);
+      return res.status(200).json({ ok: true });
+    }
+
+    const message = firstRes.choices[0].message;
+    let botReply;
+
+    if (message.tool_calls && message.tool_calls.length > 0 && !convo.leadSent) {
+      const toolCall = message.tool_calls[0];
+      let args = {};
+      try { args = JSON.parse(toolCall.function.arguments); } catch (e) { args = {}; }
+
+      const phoneDigits = (args.telefon || '').replace(/\D/g, '');
+
+      if (phoneDigits.length >= 7) {
+        // Real lead - YALNIZ admin'ə göndərilir, müştəriyə HEÇ vaxt göndərilmir
+        const now = new Date().toLocaleString('az-AZ', { timeZone: 'Asia/Baku' });
+        const adminMsg = `📥 YENİ MÜRACİƏT — UAD BOT\n\n👤 Ad: ${args.ad || '—'}\n📞 Telefon: ${args.telefon}\n🚗 Maşın: ${args.masin || '—'}\n📋 Mövzu: ${args.movzu || '—'}\n\n⏰ ${now}`;
+        await sendMessage(process.env.ADMIN_CHAT_ID, adminMsg);
+        convo.leadSent = true;
+
+        const followMessages = [
           { role: 'system', content: SYSTEM_PROMPT },
-          ...history
-        ],
-        temperature: 0.7,
-        max_tokens: 500
-      })
-    });
-
-    const openaiData = await openaiRes.json();
-
-    if (openaiData.error) {
-      console.error('OpenAI xəta:', JSON.stringify(openaiData.error));
-      await sendMessage(chatId, 'Xəta: ' + openaiData.error.message);
-      return res.status(200).json({ ok: true });
+          ...convo.history,
+          { role: 'assistant', content: null, tool_calls: message.tool_calls },
+          { role: 'tool', tool_call_id: toolCall.id, content: 'Lead qeydə alındı və Ramin ustaya göndərildi.' }
+        ];
+        const followRes = await callOpenAI(followMessages, false);
+        botReply = (followRes.choices && followRes.choices[0].message.content)
+          || 'Məlumatınız Ramin ustaya yönləndirildi. Əlavə dəqiqləşdirmə üçün 0505770082 nömrəsi ilə əlaqə saxlaya bilərsiniz.';
+      } else {
+        // Telefon yoxdur/yarımçıqdır - lead GÖNDƏRİLMİR, sadəcə soruşulur
+        botReply = message.content || 'Əlaqə saxlamaq üçün telefon nömrənizi yaza bilərsinizmi?';
+      }
+    } else {
+      botReply = message.content || 'Üzr istəyirəm, sualınızı tam başa düşmədim. Bir daha izah edə bilərsinizmi?';
     }
 
-    if (!openaiData.choices || !openaiData.choices[0]) {
-      console.error('Boş cavab:', JSON.stringify(openaiData));
-      await sendMessage(chatId, 'Texniki xəta. Zəhmət olmasa yenidən cəhd edin.');
-      return res.status(200).json({ ok: true });
-    }
-
-    let botReply = openaiData.choices[0].message.content;
-
-    // Lead markeri
-    const leadMatch = botReply.match(/\[LEAD:([^\]]+)\]/);
-    if (leadMatch) {
-      botReply = botReply.replace(/\[LEAD:[^\]]+\]/, '').trim();
-      const leadParts = {};
-      leadMatch[1].split('|').forEach(part => {
-        const [k, v] = part.split('=');
-        if (k && v) leadParts[k.trim()] = v.trim();
-      });
-      const now = new Date().toLocaleString('az-AZ', { timeZone: 'Asia/Baku' });
-      const adminMsg = `📥 YENİ MÜRACİƏT — UAD BOT\n\n👤 Ad: ${leadParts.ad || '—'}\n📞 Telefon: ${leadParts.tel || '—'}\n🚗 Maşın: ${leadParts.masin || '—'}\n\n⏰ ${now}`;
-      await sendMessage(process.env.ADMIN_CHAT_ID, adminMsg);
-    }
-
-    history.push({ role: 'assistant', content: botReply });
+    convo.history.push({ role: 'assistant', content: botReply });
     await sendMessage(chatId, botReply);
     return res.status(200).json({ ok: true });
 
@@ -130,6 +151,28 @@ export default async function handler(req, res) {
     console.error('UAD Bot xətası:', error);
     return res.status(200).json({ ok: true });
   }
+}
+
+async function callOpenAI(messages, withTools) {
+  const body = {
+    model: 'gpt-4o-mini',
+    messages,
+    temperature: 0.6,
+    max_tokens: 350
+  };
+  if (withTools) {
+    body.tools = TOOLS;
+    body.tool_choice = 'auto';
+  }
+  const r = await fetch('https://api.openai.com/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`
+    },
+    body: JSON.stringify(body)
+  });
+  return r.json();
 }
 
 async function sendMessage(chatId, text) {
