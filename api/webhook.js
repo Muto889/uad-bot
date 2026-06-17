@@ -1,5 +1,8 @@
 // UAD BOT — Ultra Avto Dizel | api/webhook.js
-// v4 TEST: sabit FAQ cavablari + lead/admin ayrimi + AZ/RU destek
+// v5: lead capture əsas yol kimi OpenAI tool-call üzərindən gedir (ad sahəsi düzgün tutulur),
+// regex (parseSimpleLead) yalnız ehtiyat/fallback kimi qalır.
+// notifyAdmin çağırışları try/catch ilə qorunur ki, admin bildirişi alınmasa belə müştəri cavabsız qalmasın.
+// sendMessage indi Telegram-ın HTTP xətalarını da (403/400 və s.) aşkarlayır — əvvəllər bunlar tam səssiz idi.
 
 const conversations = new Map(); // chatId -> { history: [], leadSent: boolean, awaitingLead: boolean, pendingProblem: string }
 
@@ -126,27 +129,16 @@ export default async function handler(req, res) {
       return res.status(200).json({ ok: true });
     }
 
-    if ((wantsLead || convo.awaitingLead) && phone && !convo.leadSent) {
-      const lead = parseSimpleLead(userText, phone, lang);
-      if (!lead.problem && convo.pendingProblem) lead.problem = convo.pendingProblem;
+    const readyForLead = (wantsLead || convo.awaitingLead) && !!phone && !convo.leadSent;
 
-      await notifyAdmin(lead, chatId, tgUser);
-      convo.leadSent = true;
-      convo.awaitingLead = false;
-      convo.pendingProblem = '';
-
-      await sendMessage(chatId, lang === 'ru'
-        ? 'Ваши данные приняты. Рамин уста свяжется с вами.'
-        : 'Məlumatınız qeydə alındı. Ramin usta sizinlə əlaqə saxlayacaq.');
-      return res.status(200).json({ ok: true });
-    }
-
-    const fixedReply = quickReply(userText, lang);
-    if (fixedReply) {
-      await sendMessage(chatId, fixedReply);
-      addHistory(convo, 'user', userText);
-      addHistory(convo, 'assistant', fixedReply);
-      return res.status(200).json({ ok: true });
+    if (!readyForLead) {
+      const fixedReply = quickReply(userText, lang);
+      if (fixedReply) {
+        await sendMessage(chatId, fixedReply);
+        addHistory(convo, 'user', userText);
+        addHistory(convo, 'assistant', fixedReply);
+        return res.status(200).json({ ok: true });
+      }
     }
 
     addHistory(convo, 'user', userText);
@@ -183,8 +175,14 @@ export default async function handler(req, res) {
           dil: args.dil || lang
         };
 
-        await notifyAdmin(lead, chatId, tgUser);
+        try {
+          await notifyAdmin(lead, chatId, tgUser);
+        } catch (e) {
+          console.error('Admin bildirişi getmədi:', e);
+        }
         convo.leadSent = true;
+        convo.awaitingLead = false;
+        convo.pendingProblem = '';
         botReply = lead.dil === 'ru'
           ? 'Ваши данные приняты. Рамин уста свяжется с вами.'
           : 'Məlumatınız qeydə alındı. Ramin usta sizinlə əlaqə saxlayacaq.';
@@ -195,6 +193,23 @@ export default async function handler(req, res) {
           ? 'Пожалуйста, напишите имя, телефон, автомобиль, мотор и проблему.'
           : 'Zəhmət olmasa adınızı, telefon nömrənizi, avtomobilinizi, motoru və problemi yazın.';
       }
+    } else if (readyForLead) {
+      // Ehtiyat variant: model create_lead çağırmadı, amma aydın niyyət + nömrə var —
+      // lead-i itirməmək üçün regex əsaslı tutma (bu yolda "ad" sahəsi boş qala bilər).
+      const lead = parseSimpleLead(userText, phone, lang);
+      if (!lead.problem && convo.pendingProblem) lead.problem = convo.pendingProblem;
+
+      try {
+        await notifyAdmin(lead, chatId, tgUser);
+      } catch (e) {
+        console.error('Admin bildirişi getmədi:', e);
+      }
+      convo.leadSent = true;
+      convo.awaitingLead = false;
+      convo.pendingProblem = '';
+      botReply = lang === 'ru'
+        ? 'Ваши данные приняты. Рамин уста свяжется с вами.'
+        : 'Məlumatınız qeydə alındı. Ramin usta sizinlə əlaqə saxlayacaq.';
     } else {
       botReply = cleanBadPhrases(aiMessage.content || fallbackReply(lang));
     }
@@ -234,13 +249,21 @@ async function callOpenAI(messages, withTools) {
 }
 
 async function sendMessage(chatId, text) {
-  if (!chatId || !text) return;
+  if (!chatId || !text) {
+    console.warn('sendMessage: chatId və ya text boşdur, mesaj göndərilmədi.', { chatId, hasText: !!text });
+    return;
+  }
 
-  await fetch(`https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
+  const r = await fetch(`https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ chat_id: chatId, text })
   });
+
+  if (!r.ok) {
+    const errText = await r.text().catch(() => '');
+    throw new Error(`Telegram sendMessage xətası (${r.status}): ${errText}`);
+  }
 }
 
 async function notifyAdmin(lead, chatId, tgUser) {
@@ -395,6 +418,8 @@ function detectLanguage(text) {
   return 'az';
 }
 
+// Qeyd: bu, yalnız ehtiyat (fallback) yolunda işlədilir — model create_lead çağırmayanda.
+// Ona görə "ad" sahəsini doldurmur (mətndən adı etibarlı ayırmaq mümkün deyil); əsas yol model tool-call-ıdır.
 function parseSimpleLead(text, phone, lang) {
   return {
     ad: '',
